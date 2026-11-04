@@ -274,6 +274,7 @@ jobs:
         with:
           name: test-agent-report-${{ github.run_id }}-${{ github.run_attempt }}
           path: .test-agent/
+          include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 30
 

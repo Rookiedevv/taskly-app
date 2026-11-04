@@ -26,6 +26,13 @@ ALLOWED = [
     "frontend/src/**/*.test.tsx",
 ]
 REPORT_DIR = Path(".test-agent")
+# Paths the Claude Code Action restores from the base branch before the agent
+# starts (so a PR cannot alter the agent's configuration). They may legitimately
+# differ from the PR head and are never committed by the workflow.
+RESTORED_BY_ACTION = (
+    ".claude/", ".claude-pr/", ".husky/", "CLAUDE.md", "CLAUDE.local.md",
+    ".mcp.json", ".claude.json", ".gitmodules", ".ripgreprc",
+)
 REQUIRED_REPORT_HEADINGS = ["### Decisions", "### Tests written or updated", "### Notes for reviewers"]
 
 
@@ -72,7 +79,10 @@ def validate_report() -> list[str]:
 
 
 def main() -> None:
-    paths = [p for p in changed_paths() if not p.startswith(".test-agent/")]
+    paths = [
+        p for p in changed_paths()
+        if not p.startswith(".test-agent/") and not p.startswith(RESTORED_BY_ACTION)
+    ]
     offending = [p for p in paths if not allowed(p)]
     test_files = [p for p in paths if allowed(p)]
     problems = validate_report()
