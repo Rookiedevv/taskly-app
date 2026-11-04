@@ -1,0 +1,364 @@
+name: Test agent
+
+# Runs the test-engineer agent (.claude/agents/test-engineer.md) on pull requests
+# and, on demand, as a repository-wide coverage sweep.
+#
+# Flow:  scope ──┬── baseline (CI on the PR head, for the "before" numbers)
+#                └── agent ──── verify (CI on the commit the agent pushed) ──── report
+#
+# Security model (see SOLUTION.md):
+#  * same-repository, non-draft PRs only – forks never get the secrets;
+#  * the agent's definition, skills and permission rules are always taken from the
+#    base branch (the action restores .claude/ from it), so a PR cannot change them;
+#  * .claude/settings.json confines the agent to test paths and test commands, and
+#    agent_guard.py re-checks the working tree before anything is committed;
+#  * verification is done by the reusable CI workflow, not by the agent;
+#  * the agent pushes with the job's GITHUB_TOKEN, which cannot trigger workflows,
+#    so it can never re-trigger itself.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      focus:
+        description: Optional focus for the coverage sweep (e.g. "backend only", "hooks and http client")
+        required: false
+        type: string
+        default: ''
+
+permissions: {}
+
+concurrency:
+  group: test-agent-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  scope:
+    name: Decide whether to run
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.pull_request.draft == false &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        !contains(github.event.pull_request.labels.*.name, 'skip-test-agent') &&
+        github.actor != 'github-actions[bot]'
+      )
+    permissions:
+      contents: read
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+      reason: ${{ steps.decide.outputs.reason }}
+      mode: ${{ steps.refs.outputs.mode }}
+      base_ref: ${{ steps.refs.outputs.base_ref }}
+      head_ref: ${{ steps.refs.outputs.head_ref }}
+      head_sha: ${{ steps.refs.outputs.head_sha }}
+    steps:
+      # Scripts are taken from the base branch (trusted), never from the PR head.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.base.ref || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve refs
+        id: refs
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [ "$EVENT" = "pull_request" ]; then
+            echo "mode=pr" >> "$GITHUB_OUTPUT"
+            echo "base_ref=$PR_BASE_REF" >> "$GITHUB_OUTPUT"
+            echo "head_ref=$PR_HEAD_REF" >> "$GITHUB_OUTPUT"
+            echo "head_sha=$PR_HEAD_SHA" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=sweep" >> "$GITHUB_OUTPUT"
+            echo "base_ref=$REF_NAME" >> "$GITHUB_OUTPUT"
+            echo "head_ref=$REF_NAME" >> "$GITHUB_OUTPUT"
+            echo "head_sha=$SHA" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Classify the change set
+        id: decide
+        env:
+          MODE: ${{ steps.refs.outputs.mode }}
+          BASE_REF: ${{ steps.refs.outputs.base_ref }}
+          HEAD_SHA: ${{ steps.refs.outputs.head_sha }}
+        run: |
+          if [ "$MODE" = "sweep" ]; then
+            { echo "run=true"; echo "reason=coverage sweep requested manually"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git fetch --no-tags --quiet origin "$BASE_REF" "$HEAD_SHA"
+          git diff --name-only "origin/$BASE_REF...$HEAD_SHA" | python3 .github/scripts/agent_scope.py
+
+      - name: Summary
+        env:
+          RUN: ${{ steps.decide.outputs.run }}
+          REASON: ${{ steps.decide.outputs.reason }}
+        run: |
+          echo "Test agent will run: **$RUN** – $REASON" >> "$GITHUB_STEP_SUMMARY"
+
+  baseline:
+    name: Baseline tests (before the agent)
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.scope.outputs.head_sha }}
+
+  agent:
+    name: Run the test-engineer agent
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      outcome: ${{ steps.claude.outcome }}
+      guard: ${{ steps.guard.outcome }}
+      changed: ${{ steps.guard.outputs.changed }}
+      new_head_sha: ${{ steps.commit.outputs.new_head_sha || steps.sweep.outputs.new_head_sha }}
+      pr_number: ${{ steps.sweep.outputs.pr_number }}
+      compare_url: ${{ steps.sweep.outputs.compare_url }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.scope.outputs.head_ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          (cd frontend && npm ci --no-audit --no-fund)
+          (cd backend && python -m pip install -r requirements.txt)
+
+      - name: Prepare workspace
+        env:
+          BASE_REF: ${{ needs.scope.outputs.base_ref }}
+        run: |
+          git fetch --no-tags --quiet origin "$BASE_REF"
+          # Keep a trusted copy of the guard script (from the base branch) outside the tree.
+          git show "origin/$BASE_REF:.github/scripts/agent_guard.py" > "$RUNNER_TEMP/agent_guard.py"
+          rm -rf .test-agent && mkdir -p .test-agent
+
+      - name: Run the agent
+        id: claude
+        continue-on-error: true
+        uses: anthropics/claude-code-action@c0949c50a78c1ec8ce2647db36629b870e715d0c # v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            You are running as the test-engineer agent inside GitHub Actions.
+
+            Mode: ${{ needs.scope.outputs.mode }}
+            Repository: ${{ github.repository }}
+            ${{ needs.scope.outputs.mode == 'pr' && format('Pull request: #{0}', github.event.pull_request.number) || 'Coverage sweep of the default branch' }}
+            BASE_REF: origin/${{ needs.scope.outputs.base_ref }}
+            HEAD: ${{ needs.scope.outputs.head_sha }}
+            ${{ inputs.focus && format('Focus requested by the operator: {0}', inputs.focus) || '' }}
+
+            Dependencies are installed. Follow your workflow exactly: scope, analyse,
+            write tests, verify, report. Write .test-agent/report.md and
+            .test-agent/result.json in the repository root. Do not commit or push –
+            the workflow does that after checking your changes.
+          claude_args: |
+            --agent test-engineer
+            --max-turns 80
+
+      - name: Check the agent's changes
+        id: guard
+        continue-on-error: true
+        run: python3 "$RUNNER_TEMP/agent_guard.py"
+
+      - name: Commit the tests to the pull request branch
+        id: commit
+        if: needs.scope.outputs.mode == 'pr' && steps.claude.outcome == 'success' && steps.guard.outcome == 'success' && steps.guard.outputs.changed == 'true'
+        env:
+          HEAD_REF: ${{ needs.scope.outputs.head_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- backend/tests frontend/src/test ':(glob)frontend/src/**/*.test.ts' ':(glob)frontend/src/**/*.test.tsx'
+          git commit -m "test: add unit tests for the changes in #${PR_NUMBER}" \
+            -m "Written by the test-engineer agent (.claude/agents/test-engineer.md) and verified by CI." \
+            -m "Workflow run: ${RUN_URL}"
+          git push origin "HEAD:refs/heads/${HEAD_REF}"
+          echo "new_head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Open a pull request with the sweep results
+        id: sweep
+        if: needs.scope.outputs.mode == 'sweep' && steps.claude.outcome == 'success' && steps.guard.outcome == 'success' && steps.guard.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_REF: ${{ needs.scope.outputs.base_ref }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          BRANCH: test-agent/coverage-sweep-${{ github.run_number }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add -- backend/tests frontend/src/test ':(glob)frontend/src/**/*.test.ts' ':(glob)frontend/src/**/*.test.tsx'
+          git commit -m "test: add missing unit tests (coverage sweep)" \
+            -m "Written by the test-engineer agent (.claude/agents/test-engineer.md) and verified by CI." \
+            -m "Workflow run: ${RUN_URL}"
+          git push -u origin "$BRANCH"
+          echo "new_head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "compare_url=${{ github.server_url }}/${{ github.repository }}/compare/${BASE_REF}...${BRANCH}?expand=1" >> "$GITHUB_OUTPUT"
+          {
+            printf 'Missing unit tests added by the test-engineer agent in a coverage sweep.\n\nWorkflow run: %s\n\n' "$RUN_URL"
+            cat .test-agent/report.md
+          } > "$RUNNER_TEMP/pr-body.md"
+          if number=$(gh pr create --base "$BASE_REF" --head "$BRANCH" \
+               --title "test: add missing unit tests (coverage sweep)" \
+               --body-file "$RUNNER_TEMP/pr-body.md" 2>"$RUNNER_TEMP/pr-error.txt"); then
+            echo "pr_number=${number##*/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Could not open the pull request automatically ($(cat "$RUNNER_TEMP/pr-error.txt" | tr '\n' ' ')). Open it from the compare link in the job summary. Repository setting required: Actions → General → 'Allow GitHub Actions to create and approve pull requests'."
+          fi
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: test-agent-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .test-agent/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Fail the job if the agent or the guard failed
+        if: steps.claude.outcome != 'success' || steps.guard.outcome != 'success'
+        env:
+          AGENT: ${{ steps.claude.outcome }}
+          GUARD: ${{ steps.guard.outcome }}
+        run: |
+          echo "::error::agent step: $AGENT, guard step: $GUARD"
+          exit 1
+
+  verify:
+    name: Verify the committed tests
+    needs: [scope, agent]
+    if: needs.agent.outputs.changed == 'true' && needs.agent.outputs.new_head_sha != ''
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.agent.outputs.new_head_sha }}
+
+  report:
+    name: Publish the results on the pull request
+    needs: [scope, baseline, agent, verify]
+    if: always() && needs.scope.result == 'success' && needs.scope.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+      statuses: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.base.ref || github.ref }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        continue-on-error: true
+        with:
+          name: test-agent-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .test-agent
+
+      - name: Compose the comment
+        id: compose
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          AGENT_OUTCOME: ${{ needs.agent.result == 'success' && 'success' || (needs.agent.outputs.outcome == 'success' && 'guard-failed' || needs.agent.result) }}
+          CHANGED: ${{ needs.agent.outputs.changed }}
+          NEW_HEAD_SHA: ${{ needs.agent.outputs.new_head_sha }}
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          BASE_FE: ${{ needs.baseline.outputs.frontend_summary }}
+          BASE_BE: ${{ needs.baseline.outputs.backend_summary }}
+          AFTER_FE: ${{ needs.verify.outputs.frontend_summary }}
+          AFTER_BE: ${{ needs.verify.outputs.backend_summary }}
+          COMPARE_URL: ${{ needs.agent.outputs.compare_url }}
+        run: |
+          verification=""
+          if [ "$CHANGED" = "true" ] && [ -n "$NEW_HEAD_SHA" ]; then
+            verification=$(python3 - <<'EOF'
+          import json, os
+          print(json.dumps({
+              "passed": os.environ["VERIFY_RESULT"] == "success",
+              "commit": os.environ["NEW_HEAD_SHA"],
+              "baseline": {"frontend": os.environ["BASE_FE"], "backend": os.environ["BASE_BE"]},
+              "after": {"frontend": os.environ["AFTER_FE"], "backend": os.environ["AFTER_BE"]},
+          }))
+          EOF
+          )
+          fi
+          python3 .github/scripts/compose_comment.py .test-agent/report.md "$RUN_URL" "$AGENT_OUTCOME" ${verification:+--verification "$verification"} > comment.md
+          if [ -n "$COMPARE_URL" ]; then
+            printf '\n\nBranch pushed by the sweep: %s\n' "$COMPARE_URL" >> comment.md
+          fi
+          cat comment.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create or update the sticky comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || needs.agent.outputs.pr_number }}
+        run: |
+          if [ -z "$PR_NUMBER" ]; then
+            echo "No pull request to comment on (sweep without a PR); the report is in the job summary."
+            exit 0
+          fi
+          existing=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
+            --jq '.[] | select(.body | contains("<!-- taskly-test-agent-report -->")) | .id' | head -n1)
+          if [ -n "$existing" ]; then
+            gh api --method PATCH "repos/$REPO/issues/comments/$existing" -F body=@comment.md > /dev/null
+            echo "Updated comment $existing on #$PR_NUMBER"
+          else
+            gh api --method POST "repos/$REPO/issues/$PR_NUMBER/comments" -F body=@comment.md > /dev/null
+            echo "Created comment on #$PR_NUMBER"
+          fi
+
+      - name: Report a commit status on the agent's commit
+        if: needs.agent.outputs.changed == 'true' && needs.agent.outputs.new_head_sha != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ needs.agent.outputs.new_head_sha }}
+          STATE: ${{ needs.verify.result == 'success' && 'success' || 'failure' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          description="Tests written by the agent pass the full suites"
+          [ "$STATE" = "success" ] || description="Tests written by the agent fail – see the run log"
+          gh api --method POST "repos/$REPO/statuses/$SHA" \
+            -f state="$STATE" -f context="Test agent / verification" \
+            -f description="$description" -f target_url="$RUN_URL" > /dev/null
