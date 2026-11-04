@@ -208,12 +208,16 @@ jobs:
             "Bash(python -m pytest:*)" "Bash(python3 -m pytest:*)"
             "Bash(mkdir -p .test-agent:*)" "Bash(cat:*)" "Bash(ls:*)"
 
-      - name: Keep the agent transcript
+      - name: Keep the agent transcript and summarize its activity
         if: always()
+        env:
+          BASE_REF: ${{ needs.scope.outputs.base_ref }}
         run: |
           mkdir -p .test-agent
           if [ -f "$RUNNER_TEMP/claude-execution-output.json" ]; then
             cp "$RUNNER_TEMP/claude-execution-output.json" .test-agent/transcript.json
+            git show "origin/$BASE_REF:.github/scripts/agent_activity.py" > "$RUNNER_TEMP/agent_activity.py"
+            python3 "$RUNNER_TEMP/agent_activity.py" .test-agent/transcript.json | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Check the agent's changes
