@@ -27,9 +27,11 @@
       "Bash(npx vitest run:*)",
       "Bash(npm test:*)",
       "Bash(npm run test:*)",
+      "Bash(npm run typecheck)",
       "Bash(npm run typecheck:*)",
       "Bash(npx tsc --noEmit:*)",
       "Bash(npx prettier:*)",
+      "Bash(npm run format:check)",
       "Bash(npm run format:*)",
       "Bash(python -m pytest:*)",
       "Bash(python3 -m pytest:*)"

@@ -191,24 +191,25 @@ jobs:
             the workflow does that after checking your changes.
           # The allow-list mirrors .claude/settings.json; headless runs need it on the
           # command line, while the deny rules keep coming from the settings file.
-          # Edit paths are absolute (// prefix) so they keep matching after the agent
-          # changes the shell's working directory with cd.
+          # Edit paths are absolute (// prefix; github.workspace already starts with /)
+          # so they keep matching after the agent changes the working directory with cd.
           claude_args: >-
             --agent test-engineer
             --max-turns 80
             --allowedTools
             "Read" "Glob" "Grep"
-            "Edit(//${{ github.workspace }}/backend/tests/**)"
-            "Edit(//${{ github.workspace }}/frontend/src/test/**)"
-            "Edit(//${{ github.workspace }}/frontend/src/**/*.test.ts)"
-            "Edit(//${{ github.workspace }}/frontend/src/**/*.test.tsx)"
-            "Edit(//${{ github.workspace }}/.test-agent/**)"
+            "Edit(/${{ github.workspace }}/backend/tests/**)"
+            "Edit(/${{ github.workspace }}/frontend/src/test/**)"
+            "Edit(/${{ github.workspace }}/frontend/src/**/*.test.ts)"
+            "Edit(/${{ github.workspace }}/frontend/src/**/*.test.tsx)"
+            "Edit(/${{ github.workspace }}/.test-agent/**)"
             "Bash(cd:*)" "Bash(ls:*)" "Bash(cat:*)" "Bash(head:*)" "Bash(tail:*)" "Bash(wc:*)"
             "Bash(mkdir -p .test-agent:*)"
             "Bash(git diff:*)" "Bash(git log:*)" "Bash(git show:*)" "Bash(git status:*)"
             "Bash(git rev-parse:*)" "Bash(git merge-base:*)" "Bash(git ls-files:*)"
             "Bash(npx vitest run:*)" "Bash(npm test:*)" "Bash(npm run test:*)"
-            "Bash(npm run typecheck:*)" "Bash(npx tsc --noEmit:*)" "Bash(npx prettier:*)" "Bash(npm run format:*)"
+            "Bash(npm run typecheck)" "Bash(npm run typecheck:*)" "Bash(npx tsc --noEmit:*)" "Bash(npx prettier:*)"
+            "Bash(npm run format:check)" "Bash(npm run format:*)"
             "Bash(python -m pytest:*)" "Bash(python3 -m pytest:*)"
 
       - name: Keep the agent transcript and summarize its activity
@@ -242,7 +243,11 @@ jobs:
           git commit -m "test: add unit tests for the changes in #${PR_NUMBER}" \
             -m "Written by the test-engineer agent (.claude/agents/test-engineer.md) and verified by CI." \
             -m "Workflow run: ${RUN_URL}"
-          git push origin "HEAD:refs/heads/${HEAD_REF}"
+          for attempt in 1 2 3 4; do
+            git push origin "HEAD:refs/heads/${HEAD_REF}" && break
+            [ "$attempt" = 4 ] && exit 1
+            echo "push failed (attempt $attempt), retrying in $((attempt * 15))s"; sleep $((attempt * 15))
+          done
           echo "new_head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Open a pull request with the sweep results
@@ -261,7 +266,11 @@ jobs:
           git commit -m "test: add missing unit tests (coverage sweep)" \
             -m "Written by the test-engineer agent (.claude/agents/test-engineer.md) and verified by CI." \
             -m "Workflow run: ${RUN_URL}"
-          git push -u origin "$BRANCH"
+          for attempt in 1 2 3 4; do
+            git push -u origin "$BRANCH" && break
+            [ "$attempt" = 4 ] && exit 1
+            echo "push failed (attempt $attempt), retrying in $((attempt * 15))s"; sleep $((attempt * 15))
+          done
           echo "new_head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "compare_url=${{ github.server_url }}/${{ github.repository }}/compare/${BASE_REF}...${BRANCH}?expand=1" >> "$GITHUB_OUTPUT"
           {
