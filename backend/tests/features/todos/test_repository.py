@@ -91,3 +91,26 @@ def test_delete_reports_false_for_missing_task_without_touching_the_session():
     assert TodoRepository(session).delete(404) is False
     session.delete.assert_not_called()
     session.commit.assert_not_called()
+
+
+def test_complete_all_marks_active_tasks_completed_and_returns_the_count(
+    model_factory, todo_values
+):
+    session = Mock(spec=Session)
+    first = model_factory(todo_values)
+    second = model_factory(dict(todo_values, id=8))
+    session.scalars.return_value = [first, second]
+    assert TodoRepository(session).complete_all() == 2
+    assert first.completed is True and second.completed is True
+    assert first.updated_at > todo_values["updated_at"]
+    assert first.updated_at.tzinfo is timezone.utc
+    session.commit.assert_called_once_with()
+    statement = session.scalars.call_args.args[0]
+    assert statement.compare(select(TodoRecord).where(TodoRecord.completed.is_(False)))
+
+
+def test_complete_all_without_active_tasks_returns_zero_without_committing():
+    session = Mock(spec=Session)
+    session.scalars.return_value = []
+    assert TodoRepository(session).complete_all() == 0
+    session.commit.assert_not_called()

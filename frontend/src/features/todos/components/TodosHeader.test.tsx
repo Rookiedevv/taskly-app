@@ -35,3 +35,32 @@ it('invokes creation when enabled and blocks it when disabled', async () => {
   await user.click(button)
   expect(onCreate).toHaveBeenCalledTimes(1)
 })
+
+it('completes all active tasks and disables the action when none remain', async () => {
+  const user = userEvent.setup()
+  const onCompleteAll = vi.fn()
+  const { rerender } = render(
+    <TodosHeader
+      disabled={false}
+      activeCount={3}
+      onCreate={vi.fn()}
+      onCompleteAll={onCompleteAll}
+    />,
+  )
+  await user.click(
+    screen.getByRole('button', { name: 'Complete all 3 active tasks' }),
+  )
+  expect(onCompleteAll).toHaveBeenCalledTimes(1)
+  rerender(
+    <TodosHeader
+      disabled={false}
+      activeCount={0}
+      onCreate={vi.fn()}
+      onCompleteAll={onCompleteAll}
+    />,
+  )
+  const button = screen.getByRole('button', { name: 'Complete all tasks' })
+  expect(button).toBeDisabled()
+  await user.click(button)
+  expect(onCompleteAll).toHaveBeenCalledTimes(1)
+})
