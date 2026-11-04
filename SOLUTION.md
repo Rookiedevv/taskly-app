@@ -219,9 +219,9 @@ Test execution – agent's run, confirmed by CI on the PR:
 
 The agent touched 20 test files and no production file; `agent_guard.py` confirmed it.
 
-### Run B – pull request adding a feature (PR #2, workflow run [41815792401](https://github.com/Rookiedevv/taskly-app/actions/runs/41815792401))
+### Run B – pull request adding a feature (PR #4, workflow run [41822720328](https://github.com/Rookiedevv/taskly-app/actions/runs/41822720328))
 
-Pull request **#2** adds a *Complete all* action: `TodoRepository.complete_all()`,
+Pull request **#4** adds a *Complete all* action: `TodoRepository.complete_all()`,
 `POST /api/todos/complete-all`, `todosApi.completeAll`, a `useCompleteAllMutation` hook, a
 button in `TodosHeader` and the wiring in `TodosPage`. The author only adjusted the existing
 tests enough to keep them compiling (new props, a mocked hook, the new route in the factory
@@ -232,7 +232,7 @@ What the workflow did, in order:
 1. `scope` classified 11 changed files: 7 production source files → run.
 2. `baseline` ran CI on the PR head: backend 51 passed (93.1 % statements), frontend
    55 passed (74.5 % statements).
-3. `agent` (33 tool calls, 34 turns, 2 min 13 s of model time) read the diff and the
+3. `agent` (32 tool calls, 33 turns, 2 min 10 s of model time) read the diff and the
    neighbouring tests, then recorded these decisions:
 
    | File | Decision | Reason given by the agent |
@@ -246,18 +246,18 @@ What the workflow did, in order:
    | `TodosHeader.tsx` | update | PR only passed the new props; button behaviour untested |
    | `TodosPage.tsx` | update | complete-all flow and notices untested |
 
-   It wrote 14 tests across 6 files (one new file), ran the affected files, then both full
+   It wrote 13 tests across 6 files (one new file), ran the affected files, then both full
    suites, `tsc` and Prettier, and produced the report. Skills used, as it reported them:
    `analyze-pr-changes` (decisions), `backend-unit-tests` (mocked session, `repository_mock`
    fixture – it even asserts the generated `SELECT … WHERE completed IS false` statement),
    `frontend-unit-tests` (API-module mock for the hook, design-system mock for the header,
    hook mocks for the page), `verify-tests`.
 4. `agent_guard.py` confirmed only test files changed; the workflow committed them as
-   `6c90863 test: add unit tests for the changes in #2` (author `github-actions[bot]`).
-5. `verify` re-ran CI on `6c90863`: **backend 55 passed, 100 % statements / branches /
-   lines; frontend 65 passed, 83.5 % statements** (branches 71.1 → 78.3 %).
+   `058964d test: add unit tests for the changes in #4` (author `github-actions[bot]`).
+5. `verify` re-ran CI on `058964d`: **backend 55 passed, 100 % statements / branches /
+   lines; frontend 64 passed, 83.5 % statements** (branches 71.1 → 78.3 %).
 6. `report` posted the sticky comment (agent report + before/after tables) and set the
-   commit status `Test agent / verification: success` on `6c90863`.
+   commit status `Test agent / verification: success` on `058964d`.
 
 ### Run C – coverage sweep from the Actions tab (workflow run [41816289315](https://github.com/Rookiedevv/taskly-app/actions/runs/41816289315))
 
@@ -271,8 +271,10 @@ commented with the before/after numbers.
 
 ### What the live runs changed
 
-The first live run of the PR workflow failed, and the failure was instructive enough to
-record here. The agent behaved correctly – it was denied every write, tried the two shell
+The PR workflow was developed against an earlier pull request from the same commits (**#2**,
+now closed; it accumulated several close/reopen cycles because reopening a PR is the way to
+re-run the workflow with an updated definition). Its first runs failed, and the failures were
+instructive enough to record here. The agent behaved correctly – it was denied every write, tried the two shell
 work-arounds a careless prompt might have allowed (`cat >>`, `python3 -`), was denied those
 too, and then stopped and explained – but three things in the workflow were wrong:
 
