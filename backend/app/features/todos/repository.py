@@ -39,6 +39,19 @@ class TodoRepository:
         self.session.refresh(record)
         return from_model(record)
 
+    def complete_all(self) -> int:
+        """Mark every active task as completed; return how many tasks changed."""
+        statement = select(TodoRecord).where(TodoRecord.completed.is_(False))
+        records = list(self.session.scalars(statement))
+        if not records:
+            return 0
+        now = datetime.now(timezone.utc)
+        for record in records:
+            record.completed = True
+            record.updated_at = now
+        self.session.commit()
+        return len(records)
+
     def delete(self, todo_id: int) -> bool:
         record = self.session.get(TodoRecord, todo_id)
         if record is None:
