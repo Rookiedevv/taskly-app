@@ -27,3 +27,11 @@ it('sends only writable task fields on creation', async () => {
     }),
   })
 })
+
+it('posts to the complete-all endpoint and returns the count', async () => {
+  vi.mocked(request).mockResolvedValue({ completed: 3 })
+  await expect(todosApi.completeAll()).resolves.toEqual({ completed: 3 })
+  expect(request).toHaveBeenCalledWith('/todos/complete-all', {
+    method: 'POST',
+  })
+})

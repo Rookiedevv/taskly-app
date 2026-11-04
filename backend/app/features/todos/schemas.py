@@ -40,3 +40,7 @@ class Todo(TodoCreate):
     id: int
     created_at: datetime
     updated_at: datetime
+
+
+class CompleteAllResult(BaseModel):
+    completed: int = Field(ge=0, description="Number of tasks that were marked as completed.")

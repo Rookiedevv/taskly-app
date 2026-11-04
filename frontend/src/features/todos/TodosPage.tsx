@@ -7,6 +7,7 @@ import { TodoEditor } from './components/TodoEditor'
 import { TodoFilters } from './components/TodoFilters'
 import { TodoList } from './components/TodoList'
 import { TodosHeader } from './components/TodosHeader'
+import { useCompleteAllMutation } from './hooks/useCompleteAllMutation'
 import { useTodoFilters } from './hooks/useTodoFilters'
 import { useTodosBusy } from './hooks/useTodosBusy'
 import { useTodosQuery } from './hooks/useTodosQuery'
@@ -18,11 +19,13 @@ export function TodosPage() {
   const todos = todosQuery.data ?? []
   const filters = useTodoFilters(todos)
   const toggleTodo = useUpdateTodoMutation()
+  const completeAll = useCompleteAllMutation()
   const busy = useTodosBusy()
   const { message, notify } = useNotice()
   const [editor, setEditor] = useState<Todo | 'new' | null>(null)
   const [deleting, setDeleting] = useState<Todo | null>(null)
-  const error = toggleTodo.error ?? todosQuery.error
+  const error = completeAll.error ?? toggleTodo.error ?? todosQuery.error
+  const activeCount = todos.filter((todo) => !todo.completed).length
 
   async function toggle(todo: Todo) {
     if (busy) return
@@ -40,8 +43,22 @@ export function TodosPage() {
       // Display the mutation error in the page alert.
     }
   }
+  async function completeAllTodos() {
+    if (busy || activeCount === 0) return
+    try {
+      const result = await completeAll.mutateAsync()
+      notify(
+        result.completed === 1
+          ? 'One task completed. Well done!'
+          : `${result.completed} tasks completed. Well done!`,
+      )
+    } catch {
+      // Display the mutation error in the page alert.
+    }
+  }
   async function retry() {
     toggleTodo.reset()
+    completeAll.reset()
     await todosQuery.refetch()
   }
 
@@ -50,7 +67,9 @@ export function TodosPage() {
       <main id="main" className="page-layout">
         <TodosHeader
           disabled={todosQuery.isPending || busy}
+          activeCount={activeCount}
           onCreate={() => setEditor('new')}
+          onCompleteAll={() => void completeAllTodos()}
         />
         <TodoFilters
           filter={filters.filter}
