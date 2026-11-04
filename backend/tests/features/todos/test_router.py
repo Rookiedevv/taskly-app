@@ -76,6 +76,16 @@ def test_delete_reports_the_repository_outcome(client, repository_mock, deleted,
     repository_mock.delete.assert_called_once_with(7)
 
 
+@pytest.mark.parametrize("count", [0, 3])
+def test_complete_all_returns_the_number_of_completed_tasks(client, repository_mock, count):
+    repository_mock.complete_all.return_value = count
+    response = client.post("/api/todos/complete-all")
+    assert response.status_code == 200
+    assert response.json() == {"completed": count}
+    repository_mock.complete_all.assert_called_once_with()
+    repository_mock.get.assert_not_called()
+
+
 @pytest.mark.parametrize("path", ["/api/todos/0", "/api/todos/-1", "/api/todos/abc"])
 def test_invalid_task_id_is_rejected_before_reaching_the_repository(
     client, repository_mock, path

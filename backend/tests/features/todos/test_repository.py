@@ -85,6 +85,30 @@ def test_delete_removes_an_existing_record(model_factory, todo_values):
     session.commit.assert_called_once_with()
 
 
+def test_complete_all_marks_active_tasks_completed_and_reports_the_count(
+    model_factory, todo_values
+):
+    session = Mock(spec=Session)
+    first = model_factory(todo_values)
+    second = model_factory(todo_values)
+    before = first.updated_at
+    session.scalars.return_value = [first, second]
+    assert TodoRepository(session).complete_all() == 2
+    assert first.completed is True and second.completed is True
+    assert first.updated_at > before
+    assert first.updated_at.tzinfo is timezone.utc
+    session.commit.assert_called_once_with()
+    statement = session.scalars.call_args.args[0]
+    assert statement.compare(select(TodoRecord).where(TodoRecord.completed.is_(False)))
+
+
+def test_complete_all_returns_zero_without_committing_when_nothing_is_active():
+    session = Mock(spec=Session)
+    session.scalars.return_value = []
+    assert TodoRepository(session).complete_all() == 0
+    session.commit.assert_not_called()
+
+
 def test_delete_reports_false_for_missing_task_without_touching_the_session():
     session = Mock(spec=Session)
     session.get.return_value = None

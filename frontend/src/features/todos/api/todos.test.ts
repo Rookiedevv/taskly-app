@@ -13,6 +13,14 @@ it('passes the abort signal when fetching tasks', async () => {
   expect(request).toHaveBeenCalledWith('/todos', { signal })
 })
 
+it('posts to the complete-all endpoint and returns the result', async () => {
+  vi.mocked(request).mockResolvedValue({ completed: 3 })
+  await expect(todosApi.completeAll()).resolves.toEqual({ completed: 3 })
+  expect(request).toHaveBeenCalledWith('/todos/complete-all', {
+    method: 'POST',
+  })
+})
+
 it('sends only writable task fields on creation', async () => {
   vi.mocked(request).mockResolvedValue(todoFixture)
   await expect(todosApi.create(todoFixture)).resolves.toEqual(todoFixture)
