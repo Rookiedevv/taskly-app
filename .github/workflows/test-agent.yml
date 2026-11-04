@@ -191,22 +191,25 @@ jobs:
             the workflow does that after checking your changes.
           # The allow-list mirrors .claude/settings.json; headless runs need it on the
           # command line, while the deny rules keep coming from the settings file.
+          # Edit paths are absolute (// prefix) so they keep matching after the agent
+          # changes the shell's working directory with cd.
           claude_args: >-
             --agent test-engineer
             --max-turns 80
             --allowedTools
             "Read" "Glob" "Grep"
-            "Edit(backend/tests/**)" "Write(backend/tests/**)"
-            "Edit(frontend/src/test/**)" "Write(frontend/src/test/**)"
-            "Edit(frontend/src/**/*.test.ts)" "Write(frontend/src/**/*.test.ts)"
-            "Edit(frontend/src/**/*.test.tsx)" "Write(frontend/src/**/*.test.tsx)"
-            "Edit(.test-agent/**)" "Write(.test-agent/**)"
-            "Bash(cd:*)" "Bash(git diff:*)" "Bash(git log:*)" "Bash(git show:*)"
-            "Bash(git status:*)" "Bash(git rev-parse:*)" "Bash(git merge-base:*)" "Bash(git ls-files:*)"
+            "Edit(//${{ github.workspace }}/backend/tests/**)"
+            "Edit(//${{ github.workspace }}/frontend/src/test/**)"
+            "Edit(//${{ github.workspace }}/frontend/src/**/*.test.ts)"
+            "Edit(//${{ github.workspace }}/frontend/src/**/*.test.tsx)"
+            "Edit(//${{ github.workspace }}/.test-agent/**)"
+            "Bash(cd:*)" "Bash(ls:*)" "Bash(cat:*)" "Bash(head:*)" "Bash(tail:*)" "Bash(wc:*)"
+            "Bash(mkdir -p .test-agent:*)"
+            "Bash(git diff:*)" "Bash(git log:*)" "Bash(git show:*)" "Bash(git status:*)"
+            "Bash(git rev-parse:*)" "Bash(git merge-base:*)" "Bash(git ls-files:*)"
             "Bash(npx vitest run:*)" "Bash(npm test:*)" "Bash(npm run test:*)"
             "Bash(npm run typecheck:*)" "Bash(npx tsc --noEmit:*)" "Bash(npx prettier:*)" "Bash(npm run format:*)"
             "Bash(python -m pytest:*)" "Bash(python3 -m pytest:*)"
-            "Bash(mkdir -p .test-agent:*)" "Bash(cat:*)" "Bash(ls:*)"
 
       - name: Keep the agent transcript and summarize its activity
         if: always()
