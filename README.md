@@ -80,3 +80,11 @@ Coverage — `backend/coverage/html/index.html`:
 ```sh
 python -m pytest --cov=app --cov-report=term-missing --cov-report=html
 ```
+
+## Test automation
+
+Unit tests are maintained with the help of a custom Claude Code agent (`.claude/agents/test-engineer.md`)
+and its skills (`.claude/skills/`). The agent runs on every pull request through
+`.github/workflows/test-agent.yml`, adds or updates tests for the changed code, and reports on the PR;
+`.github/workflows/ci.yml` runs both suites with coverage. Design, prerequisites, example runs and
+limitations are described in [SOLUTION.md](SOLUTION.md).

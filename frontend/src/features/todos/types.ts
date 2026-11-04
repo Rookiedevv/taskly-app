@@ -13,3 +13,6 @@ export interface Todo extends TodoInput {
 }
 export type Filter = 'all' | 'active' | 'completed'
 export type Sort = 'newest' | 'priority' | 'due'
+export interface CompleteAllResult {
+  completed: number
+}

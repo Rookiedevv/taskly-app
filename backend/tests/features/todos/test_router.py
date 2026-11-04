@@ -86,3 +86,13 @@ def test_invalid_task_id_is_rejected_before_reaching_the_repository(
     repository_mock.get.assert_not_called()
     repository_mock.update.assert_not_called()
     repository_mock.delete.assert_not_called()
+
+
+@pytest.mark.parametrize("count", [0, 3])
+def test_complete_all_reports_how_many_tasks_changed(client, repository_mock, count):
+    repository_mock.complete_all.return_value = count
+    response = client.post("/api/todos/complete-all")
+    assert response.status_code == 200
+    assert response.json() == dict(completed=count)
+    repository_mock.complete_all.assert_called_once_with()
+    repository_mock.get.assert_not_called()

@@ -21,8 +21,14 @@ def test_create_app_sets_metadata_database_url_and_mounts_all_routes(resolve_dat
     assert app.state.database_url == "postgresql+psycopg://resolved"
     resolve_database_url.assert_called_once_with("sqlite://explicit")
     paths = app.openapi()["paths"]
-    assert set(paths) == {"/api/health", "/api/todos", "/api/todos/{todo_id}"}
+    assert set(paths) == {
+        "/api/health",
+        "/api/todos",
+        "/api/todos/complete-all",
+        "/api/todos/{todo_id}",
+    }
     assert set(paths["/api/todos"]) == {"get", "post"}
+    assert set(paths["/api/todos/complete-all"]) == {"post"}
     assert set(paths["/api/todos/{todo_id}"]) == {"get", "patch", "delete"}
 
 
