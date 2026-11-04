@@ -189,9 +189,32 @@ jobs:
             write tests, verify, report. Write .test-agent/report.md and
             .test-agent/result.json in the repository root. Do not commit or push –
             the workflow does that after checking your changes.
-          claude_args: |
+          # The allow-list mirrors .claude/settings.json; headless runs need it on the
+          # command line, while the deny rules keep coming from the settings file.
+          claude_args: >-
             --agent test-engineer
             --max-turns 80
+            --allowedTools
+            "Read" "Glob" "Grep"
+            "Edit(backend/tests/**)" "Write(backend/tests/**)"
+            "Edit(frontend/src/test/**)" "Write(frontend/src/test/**)"
+            "Edit(frontend/src/**/*.test.ts)" "Write(frontend/src/**/*.test.ts)"
+            "Edit(frontend/src/**/*.test.tsx)" "Write(frontend/src/**/*.test.tsx)"
+            "Edit(.test-agent/**)" "Write(.test-agent/**)"
+            "Bash(cd:*)" "Bash(git diff:*)" "Bash(git log:*)" "Bash(git show:*)"
+            "Bash(git status:*)" "Bash(git rev-parse:*)" "Bash(git merge-base:*)" "Bash(git ls-files:*)"
+            "Bash(npx vitest run:*)" "Bash(npm test:*)" "Bash(npm run test:*)"
+            "Bash(npm run typecheck:*)" "Bash(npx tsc --noEmit:*)" "Bash(npx prettier:*)" "Bash(npm run format:*)"
+            "Bash(python -m pytest:*)" "Bash(python3 -m pytest:*)"
+            "Bash(mkdir -p .test-agent:*)" "Bash(cat:*)" "Bash(ls:*)"
+
+      - name: Keep the agent transcript
+        if: always()
+        run: |
+          mkdir -p .test-agent
+          if [ -f "$RUNNER_TEMP/claude-execution-output.json" ]; then
+            cp "$RUNNER_TEMP/claude-execution-output.json" .test-agent/transcript.json
+          fi
 
       - name: Check the agent's changes
         id: guard
