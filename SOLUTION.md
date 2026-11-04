@@ -9,7 +9,7 @@ pull requests, verifies what it wrote, and reports back on the PR.
 | Custom agent | `.claude/agents/test-engineer.md` |
 | Skills | `.claude/skills/analyze-pr-changes`, `backend-unit-tests`, `frontend-unit-tests`, `verify-tests` (one `SKILL.md` each) |
 | Permission rules for the agent | `.claude/settings.json` |
-| PR workflow | `.github/workflows/test-agent.yml` (+ helper scripts in `.github/scripts/`) |
+| PR workflow | `.github/workflows/test-agent.yml` (+ `agent_scope.py`, `agent_guard.py`, `agent_activity.py`, `compose_comment.py` in `.github/scripts/`) |
 | Plain CI (also reused by the agent workflow) | `.github/workflows/ci.yml` |
 | Project notes read by Claude Code | `CLAUDE.md` |
 
@@ -177,11 +177,11 @@ developer machine as well.
   start-up, so every run applies the same conventions; they can also be invoked on their own
   in an interactive Claude Code session (`/analyze-pr-changes`, …) or reused by other agents.
 - **In CI** the workflow checks out the PR branch, installs dependencies and calls the
-  Claude Code Action with `claude_args: --agent test-engineer --max-turns 80` and a short
-  prompt that carries only the mode, the base ref, the head SHA and the PR number (never the
-  PR title or body – those are untrusted input the agent reads itself from git). The Action
-  loads `.claude/settings.json` as the project settings source, which is how the permission
-  rules reach the agent.
+  Claude Code Action with `claude_args: --agent test-engineer --max-turns 80 --allowedTools …`
+  (the allow-list, with absolute paths) and a short prompt that carries only the mode, the
+  base ref, the head SHA and the PR number (never the PR title or body – those are untrusted
+  input the agent reads itself from git). The Action also loads `.claude/settings.json` as
+  the project settings source, which is how the deny rules reach the agent.
 - The agent leaves two artifacts in `.test-agent/` (ignored by git): `report.md` (posted on
   the PR) and `result.json` (machine-readable summary, uploaded as a workflow artifact).
 
@@ -190,8 +190,8 @@ developer machine as well.
 ### Run A – coverage sweep (adding the missing tests to the base application)
 
 The missing unit tests in this repository were produced by the agent in sweep mode, run
-with Claude Code against the imported base application, and merged through pull request
-**#1** (its description is the agent's unedited report).
+with Claude Code against the imported base application before the GitHub workflow existed,
+and merged through pull request **#1** (its description is the agent's unedited report).
 
 Agent decisions – 23 modules analysed:
 
@@ -219,9 +219,78 @@ Test execution – agent's run, confirmed by CI on the PR:
 
 The agent touched 20 test files and no production file; `agent_guard.py` confirmed it.
 
-### Run B – pull request adding a feature
+### Run B – pull request adding a feature (PR #2, workflow run [41815792401](https://github.com/Rookiedevv/taskly-app/actions/runs/41815792401))
 
-_To be filled in with the live run on the feature pull request._
+Pull request **#2** adds a *Complete all* action: `TodoRepository.complete_all()`,
+`POST /api/todos/complete-all`, `todosApi.completeAll`, a `useCompleteAllMutation` hook, a
+button in `TodosHeader` and the wiring in `TodosPage`. The author only adjusted the existing
+tests enough to keep them compiling (new props, a mocked hook, the new route in the factory
+test) – which is exactly the situation the agent is for.
+
+What the workflow did, in order:
+
+1. `scope` classified 11 changed files: 7 production source files → run.
+2. `baseline` ran CI on the PR head: backend 51 passed (93.1 % statements), frontend
+   55 passed (74.5 % statements).
+3. `agent` (33 tool calls, 34 turns, 2 min 13 s of model time) read the diff and the
+   neighbouring tests, then recorded these decisions:
+
+   | File | Decision | Reason given by the agent |
+   |---|---|---|
+   | `repository.py` | test | new `complete_all` had no tests |
+   | `router.py` | test | new `POST /complete-all` route had no tests |
+   | `schemas.py`, `queryKeys.ts`, `types.ts` | skip | covered through router/hook, constants, types only |
+   | `test_factory.py` | skip | already updated in the PR |
+   | `api/todos.ts` | update | `completeAll` untested |
+   | `useCompleteAllMutation.ts` | test | new hook |
+   | `TodosHeader.tsx` | update | PR only passed the new props; button behaviour untested |
+   | `TodosPage.tsx` | update | complete-all flow and notices untested |
+
+   It wrote 14 tests across 6 files (one new file), ran the affected files, then both full
+   suites, `tsc` and Prettier, and produced the report. Skills used, as it reported them:
+   `analyze-pr-changes` (decisions), `backend-unit-tests` (mocked session, `repository_mock`
+   fixture – it even asserts the generated `SELECT … WHERE completed IS false` statement),
+   `frontend-unit-tests` (API-module mock for the hook, design-system mock for the header,
+   hook mocks for the page), `verify-tests`.
+4. `agent_guard.py` confirmed only test files changed; the workflow committed them as
+   `6c90863 test: add unit tests for the changes in #2` (author `github-actions[bot]`).
+5. `verify` re-ran CI on `6c90863`: **backend 55 passed, 100 % statements / branches /
+   lines; frontend 65 passed, 83.5 % statements** (branches 71.1 → 78.3 %).
+6. `report` posted the sticky comment (agent report + before/after tables) and set the
+   commit status `Test agent / verification: success` on `6c90863`.
+
+### Run C – coverage sweep from the Actions tab (workflow run [41816289315](https://github.com/Rookiedevv/taskly-app/actions/runs/41816289315))
+
+Triggered with *Run workflow* on `main` after run A had been merged. The agent found the
+backend at 100 % and skipped it, picked the three frontend modules with the largest gaps
+(`api/todos.ts`, `TodoList.tsx`, `DeleteTodoDialog.tsx`), added 10 tests to their existing
+test files, and explicitly left `TodosPage.tsx` for a follow-up in its notes. The workflow
+pushed `test-agent/coverage-sweep-10`, opened pull request **#3** with the report as its
+description, verified it (frontend 65 passed, **88.7 % statements**, 89.4 % lines) and
+commented with the before/after numbers.
+
+### What the live runs changed
+
+The first live run of the PR workflow failed, and the failure was instructive enough to
+record here. The agent behaved correctly – it was denied every write, tried the two shell
+work-arounds a careless prompt might have allowed (`cat >>`, `python3 -`), was denied those
+too, and then stopped and explained – but three things in the workflow were wrong:
+
+- **Permission patterns were relative to the shell's working directory.** After the agent
+  ran `cd frontend/src/features/todos`, `Edit(frontend/src/**/*.test.ts)` no longer matched
+  the files it was allowed to edit. The allow-list is now anchored to absolute paths
+  (`//<workspace>/…`) in the workflow and to the repository root (`/…`) in
+  `.claude/settings.json`. `Write(...)` rules were removed: only `Edit(...)` rules are
+  consulted, and they cover every file-editing tool.
+- **`upload-artifact` skips hidden directories** by default, so the `.test-agent/` report was
+  never uploaded (`include-hidden-files: true`), and the Claude Code Action's restore of
+  `.claude/` from the base branch looked like an illegal change to the guard (now ignored).
+- **GitHub returned a transient `Internal Server Error` on the push** after an otherwise
+  perfect run; the push now retries with backoff.
+
+To make such failures diagnosable without downloading anything, the agent job now prints a
+secret-free activity summary (tool calls, result block, every permission denial) to the log
+and the job summary (`.github/scripts/agent_activity.py`).
 
 ## 5. Assumptions
 
@@ -252,9 +321,11 @@ _To be filled in with the live run on the feature pull request._
   `GITHUB_TOKEN`, the standalone `CI` workflow does not run on its commit; the `verify` job
   and the commit status cover that gap, but a human pushing afterwards is what produces the
   next regular CI run.
-- **Permission rules vs. compound shell commands.** The allow-list is path/prefix based; a
-  genuinely new test command (e.g. a new npm script) needs a rule added to
-  `.claude/settings.json`.
+- **Permission rules are literal.** The allow-list is prefix based and compound commands are
+  checked part by part, so the agent occasionally loses a turn to a denied `cat … | head`
+  variant (visible in the activity summary). A genuinely new test command needs a rule in
+  both `.claude/settings.json` and the workflow's `--allowedTools`; keeping the two lists in
+  sync is manual today.
 - **Detection of bugs is best-effort.** The agent is told to report rather than encode
   suspicious behaviour, but it decides what is suspicious; a wrong-but-plausible
   implementation can still get a test that pins it.
